@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+# Notebooks
+.ipynb_checkpoints/
+# Bases locales generadas por notebooks
+*.db
+*.db-journal
+# Sistema / logs
+.DS_Store
+Thumbs.db
+*.log
+# Nota: galan.pbix SI se versiona por decisión explícita (liviano, 0.9 MB)

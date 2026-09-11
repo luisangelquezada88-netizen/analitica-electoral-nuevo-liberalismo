@@ -1,0 +1,20 @@
+# Núcleo reproducible
+pandas
+numpy
+duckdb
+pyarrow
+# Geoespacial y clustering (Fase 4)
+geopandas
+hdbscan
+scikit-learn
+matplotlib
+seaborn
+# Tablero (Fase 5)
+plotly
+streamlit
+# Limpieza texto y Excel (Fase 3)
+unidecode
+openpyxl
+# Notebooks
+jupyter
+ipykernel
