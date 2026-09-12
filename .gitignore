@@ -12,4 +12,8 @@ venv/
 .DS_Store
 Thumbs.db
 *.log
+# Raw pesado que supera el límite de GitHub (100 MB por archivo).
+# Se ignora por RUTA EXACTA para no excluir el resto de .csv.
+# El archivo se conserva localmente como raw data, solo deja de versionarse.
+data/raw/2021_2026/23_territoriales_nuevo_liberalismo.csv
 # Nota: galan.pbix SI se versiona por decisión explícita (liviano, 0.9 MB)
