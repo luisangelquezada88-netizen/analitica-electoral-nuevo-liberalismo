@@ -12,6 +12,8 @@ seaborn
 # Tablero (Fase 5)
 plotly
 streamlit
+streamlit-folium
+folium
 # Limpieza texto y Excel (Fase 3)
 unidecode
 openpyxl

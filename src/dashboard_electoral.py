@@ -1,792 +1,409 @@
+import os
+os.environ["SHAPE_ENCODING"] = "UTF-8"
+from pathlib import Path
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import folium
+from streamlit_folium import st_folium
+import hdbscan
+import matplotlib
+import matplotlib.pyplot as plt
+from unidecode import unidecode
 
-# =========================================================
-# CONFIGURACIÓN
-# =========================================================
-st.set_page_config(
-    page_title="Dashboard Electoral Colombia",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+def norm_key(s):
+    if pd.isna(s):
+        return ""
+    return unidecode(str(s).lower().strip())
 
-PARQUET_PATH = r"C:\Users\qluis\Documents\Proyectos\Nuevo liberalismo\output\dataset_final.parquet"
-TOP_N_DEFAULT = 15
+# ── Config ──────────────────────────────────────────────────────────
+st.set_page_config(page_title="Nuevo Liberalismo — Analítica Electoral", layout="wide", initial_sidebar_state="expanded")
+ROOT = Path(__file__).resolve().parents[1]
+PROC = ROOT / "data" / "processed"
+GEO = ROOT / "data" / "raw" / "geodata"
 
-COLORS = {
-    "bg": "#F6F8FB",
-    "card": "#FFFFFF",
-    "text": "#000000",
-    "muted": "#5B6475",
-    "grid": "#DCE3EC",
-    "primary": "#0F766E",
-    "secondary": "#334155",
-    "accent": "#14B8A6",
-    "amber": "#B45309",
-    "red": "#B42318",
-    "red_soft": "#E11D48"
-}
+COLORS = {"bg":"#FDF8F8","card":"#FFFFFF","text":"#111827","muted":"#374151","grid":"#E5E7EB",
+          "red":"#B42318","red_soft":"#E11D48","red_dark":"#7C2D12","teal":"#0F766E","slate":"#1F2937"}
 
-# =========================================================
-# ESTILO
-# =========================================================
-st.markdown(
-    f"""
-    <style>
-    .stApp {{
-        background-color: {COLORS["bg"]};
-    }}
-    .block-container {{
-        padding-top: 1.15rem;
-        padding-bottom: 1.5rem;
-        max-width: 96rem;
-    }}
-    h1, h2, h3 {{
-        color: {COLORS["text"]};
-        letter-spacing: -0.02em;
-    }}
-    .kpi {{
-        background: {COLORS["card"]};
-        border: 1px solid {COLORS["grid"]};
-        border-radius: 16px;
-        padding: 18px 18px 14px 18px;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
-        min-height: 108px;
-    }}
-    .kpi-label {{
-        color: {COLORS["muted"]};
-        font-size: 0.87rem;
-        margin-bottom: 0.2rem;
-    }}
-    .kpi-value {{
-        color: {COLORS["text"]};
-        font-size: 1.7rem;
-        font-weight: 700;
-        line-height: 1.05;
-    }}
-    .kpi-sub {{
-        color: {COLORS["muted"]};
-        font-size: 0.82rem;
-        margin-top: 0.35rem;
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown(f"""
+<style>
+.stApp{{background-color:{COLORS["bg"]}}}
+.block-container{{padding-top:1rem;max-width:96rem}}
+h1,h2,h3,[data-testid="stSubheader"] h3,[data-testid="stHeader"]{{color:{COLORS["text"]} !important;letter-spacing:-0.02em;opacity:1 !important}}
+.page-title{{color:{COLORS["text"]} !important;font-size:1.6rem;font-weight:800;letter-spacing:-0.02em;margin:0.2rem 0 0.6rem 0}}
+.kpi{{background:{COLORS["card"]};border:1px solid {COLORS["grid"]};border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(0,0,0,0.04)}}
+.kpi-label{{color:{COLORS["muted"]};font-size:0.82rem}}.kpi-value{{color:{COLORS["text"]};font-size:1.55rem;font-weight:700}} .kpi-sub{{color:{COLORS["muted"]};font-size:0.78rem}}
+/* Selector de página: botones grandes */
+[data-testid="stSegmentedControl"] {{margin:0.2rem 0 0.4rem 0}}
+[data-testid="stSegmentedControl"] button {{
+  font-size:1.05rem !important;font-weight:800 !important;letter-spacing:0.03em;
+  padding:10px 34px !important;border:2px solid {COLORS["red"]} !important;border-radius:12px !important;
+  color:{COLORS["red"]} !important;background:{COLORS["card"]} !important;
+}}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] {{
+  background:{COLORS["red"]} !important;color:white !important;border-color:{COLORS["red_dark"]} !important;
+  box-shadow:0 4px 12px rgba(180,35,24,0.35);
+}}
+[data-testid="stSegmentedControl"] button p {{font-size:1.05rem !important;font-weight:800 !important;margin:0 !important}}
+</style>
+""", unsafe_allow_html=True)
 
-# =========================================================
-# UTILIDADES
-# =========================================================
-def fmt_int(x):
-    if pd.isna(x):
-        return "-"
-    return f"{int(round(x)):,}".replace(",", ".")
-
-def fmt_pct(x):
-    if pd.isna(x):
-        return "-"
-    return f"{x:.2f}%"
-
-def clean_text(x):
-    if pd.isna(x):
-        return np.nan
-    return str(x).strip()
-
-def base_layout(fig, height=430, show_legend=True, top_margin=70):
-    fig.update_layout(
-        template="plotly_white",
-        height=height,
-        paper_bgcolor=COLORS["card"],
-        plot_bgcolor=COLORS["card"],
-        font=dict(color=COLORS["text"], family="Arial", size=13),
-        margin=dict(l=20, r=20, t=top_margin, b=20),
-        title=dict(
-            text=fig.layout.title.text,
-            font=dict(size=18, color=COLORS["text"]),
-            x=0.0,
-            xanchor="left",
-            y=0.96
-        ),
-        showlegend=show_legend,
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1.0,
-            xanchor="left",
-            x=1.02,
-            font=dict(size=12, color=COLORS["text"]),
-            title=dict(font=dict(size=12, color=COLORS["text"]))
-        )
-    )
-    fig.update_xaxes(
-        showgrid=True,
-        gridcolor=COLORS["grid"],
-        zeroline=False,
-        tickfont=dict(size=12, color=COLORS["text"]),
-        title_font=dict(size=13, color=COLORS["text"])
-    )
-    fig.update_yaxes(
-        showgrid=True,
-        gridcolor=COLORS["grid"],
-        zeroline=False,
-        tickfont=dict(size=12, color=COLORS["text"]),
-        title_font=dict(size=13, color=COLORS["text"])
-    )
-    return fig
-
-def show_kpi(label, value, sub=""):
-    st.markdown(
-        f"""
-        <div class="kpi">
-            <div class="kpi-label">{label}</div>
-            <div class="kpi-value">{value}</div>
-            <div class="kpi-sub">{sub}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-def empty_fig(title, height=420):
-    fig = go.Figure()
-    fig.add_annotation(
-        text="Sin datos para la selección actual",
-        x=0.5, y=0.5,
-        showarrow=False,
-        font=dict(size=16, color=COLORS["muted"])
-    )
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=18, color=COLORS["text"])),
-        template="plotly_white",
-        height=height,
-        paper_bgcolor=COLORS["card"],
-        plot_bgcolor=COLORS["card"],
-        margin=dict(l=20, r=20, t=100, b=20),
-        font=dict(color=COLORS["text"])
-    )
-    return fig
+def fmt(x):
+    return f"{int(round(x)):,}".replace(",", ".") if pd.notna(x) else "-"
 
 @st.cache_data(show_spinner=False)
-def load_data(parquet_path):
-    df = pd.read_parquet(parquet_path)
-
-    required_cols = [
-        "votos", "candidato", "partido", "departamento",
-        "municipio", "ano", "corporacion"
-    ]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Faltan columnas requeridas en el parquet: {missing}")
-
-    df = df.copy()
-
-    text_cols = ["candidato", "partido", "departamento", "municipio", "corporacion"]
-    for c in text_cols:
-        df[c] = df[c].apply(clean_text)
-
-    df["votos"] = pd.to_numeric(df["votos"], errors="coerce").fillna(0)
-    df["ano"] = pd.to_numeric(df["ano"], errors="coerce")
-    df = df[df["votos"] >= 0].copy()
-
-    df["Año electoral"] = df["ano"].astype("Int64").astype(str)
-    df.loc[df["ano"].isna(), "Año electoral"] = "Sin dato"
-
+def load_nl():
+    df=pd.read_parquet(PROC/"nuevo_liberalismo.parquet")
+    df["ano"]=pd.to_numeric(df["ano"],errors="coerce")
     return df
 
-def apply_filters(df, years, corporaciones, departamentos, municipios, partidos, candidatos):
-    out = df.copy()
-    if years:
-        out = out[out["Año electoral"].isin(years)]
-    if corporaciones:
-        out = out[out["corporacion"].isin(corporaciones)]
-    if departamentos:
-        out = out[out["departamento"].isin(departamentos)]
-    if municipios:
-        out = out[out["municipio"].isin(municipios)]
-    if partidos:
-        out = out[out["partido"].isin(partidos)]
-    if candidatos:
-        out = out[out["candidato"].isin(candidatos)]
-    return out
+@st.cache_data(show_spinner=False)
+def load_gal():
+    df=pd.read_parquet(PROC/"carlos_fernando_galan.parquet")
+    df["ano"]=pd.to_numeric(df["ano"],errors="coerce")
+    df["corporacion_norm"]=df["corporacion"].str.lower()
+    return df
 
-# =========================================================
-# CARGA
-# =========================================================
+@st.cache_resource(show_spinner=False)
+def load_geo():
+    dept=gpd.read_file(str(GEO/"departamentos"/"MGN_ADM_DPTO_POLITICO.shp")).to_crs(4326)
+    dept["dpto_ccdgo"]=dept["dpto_ccdgo"].astype(str).str.zfill(2)
+    # simplify for speed
+    dept["geometry"]=dept["geometry"].simplify(0.005)
+    loc=gpd.read_file(str(GEO/"localidades"/"Loca.shp")).to_crs(4326)
+    upz=gpd.read_file(str(GEO/"upz"/"upz-bogota.shp")).to_crs(4326)
+    upz["geometry"]=upz["geometry"].simplify(0.001)
+    return dept, loc, upz
+
 try:
-    df = load_data(PARQUET_PATH)
+    nl=load_nl(); gal=load_gal(); dept_gdf, loc_gdf, upz_gdf = load_geo()
 except Exception as e:
-    st.error(f"Error cargando los datos: {e}")
-    st.stop()
+    st.error(f"Error cargando datos: {e}"); st.stop()
 
-# =========================================================
-# FILTROS
-# =========================================================
+# ── Filtros ──────────────────────────────────────────────────────────
 st.sidebar.title("Filtros")
+if st.sidebar.button("🔄 Borrar filtros", use_container_width=True):
+    for _k, _v in [("f_cand", []), ("f_part", []), ("f_corp", []), ("f_dept", []), ("f_mun", []), ("f_topn", 10)]:
+        st.session_state[_k] = _v
+    st.session_state.sel_depto_map = None
+    st.session_state.sel_upz = None
+    st.rerun()
 
-year_options = sorted([x for x in df["Año electoral"].dropna().unique().tolist() if x != "Sin dato"])
-corp_options = sorted(df["corporacion"].dropna().unique().tolist())
-dept_options = sorted(df["departamento"].dropna().unique().tolist())
+# Opciones limitadas para candidatos (top 60 por votos para no saturar)
+cand_opts = nl.groupby("candidato")["votos"].sum().sort_values(ascending=False).head(60).index.tolist()
+if "lista" not in cand_opts: cand_opts = ["lista"]+cand_opts
+part_opts = sorted(nl["partido"].dropna().unique().tolist())
+corp_opts = sorted(nl["corporacion"].dropna().unique().tolist())
+dept_opts = sorted(nl["departamento"].dropna().unique().tolist())
 
-selected_years = st.sidebar.multiselect("Año electoral", year_options, default=year_options)
-selected_corp = st.sidebar.multiselect("Corporación", corp_options, default=[])
-selected_dept = st.sidebar.multiselect("Departamento", dept_options, default=[])
+sel_cand = st.sidebar.multiselect("Candidato", cand_opts, placeholder="Todos", key="f_cand")
+sel_part = st.sidebar.multiselect("Coalición", part_opts, placeholder="Todas", key="f_part")
+sel_corp = st.sidebar.multiselect("Corporación", corp_opts, placeholder="Todas", key="f_corp")
+sel_dept = st.sidebar.multiselect("Departamento", dept_opts, placeholder="Todos", key="f_dept")
 
-df_mun = df.copy()
-if selected_dept:
-    df_mun = df_mun[df_mun["departamento"].isin(selected_dept)]
-mun_options = sorted(df_mun["municipio"].dropna().unique().tolist())
-selected_mun = st.sidebar.multiselect("Municipio", mun_options, default=[])
+# Municipio dependiente de departamento
+mun_base = nl if not sel_dept else nl[nl["departamento"].isin(sel_dept)]
+# limitar a top 80 municipios por votos para no listar 1.1k
+mun_opts = mun_base.groupby("municipio")["votos"].sum().sort_values(ascending=False).head(80).index.tolist()
+sel_mun = st.sidebar.multiselect("Municipio", sorted(mun_opts), placeholder="Todos", key="f_mun")
 
-df_party = df.copy()
-if selected_years:
-    df_party = df_party[df_party["Año electoral"].isin(selected_years)]
-if selected_corp:
-    df_party = df_party[df_party["corporacion"].isin(selected_corp)]
-party_options = sorted(df_party["partido"].dropna().unique().tolist())
-selected_party = st.sidebar.multiselect("Partido", party_options, default=[])
+top_n = st.sidebar.slider("Top N tablas", 5, 20, 10, key="f_topn")
 
-df_cand = df.copy()
-if selected_party:
-    df_cand = df_cand[df_cand["partido"].isin(selected_party)]
-if selected_years:
-    df_cand = df_cand[df_cand["Año electoral"].isin(selected_years)]
-cand_options = sorted(df_cand["candidato"].dropna().unique().tolist())
-selected_cand = st.sidebar.multiselect("Candidato", cand_options, default=[])
+# Aplicar filtros a NL
+flt = nl.copy()
+if sel_cand: flt = flt[flt["candidato"].isin(sel_cand)]
+if sel_part: flt = flt[flt["partido"].isin(sel_part)]
+if sel_corp: flt = flt[flt["corporacion"].str.lower().isin([c.lower() for c in sel_corp])]
+if sel_dept: flt = flt[flt["departamento"].isin(sel_dept)]
+if sel_mun: flt = flt[flt["municipio"].isin(sel_mun)]
 
-top_n = st.sidebar.slider("Top N", 5, 30, TOP_N_DEFAULT)
-metric_mode = st.sidebar.radio("Métrica", ["Votos", "Participación %"])
+# Gal filtrado solo por corporación (normalizada)
+gal_flt = gal.copy()
+if sel_corp:
+    gal_flt = gal_flt[gal_flt["corporacion_norm"].isin([c.lower() for c in sel_corp])]
 
-filtered = apply_filters(
-    df,
-    selected_years,
-    selected_corp,
-    selected_dept,
-    selected_mun,
-    selected_party,
-    selected_cand
-)
+if flt.empty:
+    st.warning("Filtros sin resultados."); st.stop()
 
-if filtered.empty:
-    st.warning("La combinación actual de filtros no devuelve registros.")
-    st.stop()
+# Estado para selección interactiva
+if "sel_depto_map" not in st.session_state: st.session_state.sel_depto_map=None
+if "sel_upz" not in st.session_state: st.session_state.sel_upz=None
 
-# =========================================================
-# KPIs
-# =========================================================
-total_votos = filtered["votos"].sum()
-total_partidos = filtered["partido"].nunique(dropna=True)
-total_candidatos = filtered["candidato"].nunique(dropna=True)
-total_departamentos = filtered["departamento"].nunique(dropna=True)
-total_municipios = filtered["municipio"].nunique(dropna=True)
-total_corporaciones = filtered["corporacion"].nunique(dropna=True)
+def kpi(label,value,sub=""):
+    st.markdown(f'<div class="kpi"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>', unsafe_allow_html=True)
 
-party_leader = (
-    filtered.groupby("partido", as_index=False)["votos"]
-    .sum()
-    .sort_values("votos", ascending=False)
-)
+def base_layout(fig,h=380):
+    fig.update_layout(template="plotly_white",height=h,paper_bgcolor=COLORS["card"],plot_bgcolor=COLORS["card"],
+        font=dict(color=COLORS["text"],family="Arial",size=13),margin=dict(l=20,r=20,t=50,b=20),
+        title=dict(font=dict(size=15,color=COLORS["text"]),x=0,xanchor="left"))
+    fig.update_xaxes(gridcolor=COLORS["grid"], tickfont=dict(color=COLORS["text"],size=12), title_font=dict(color=COLORS["text"],size=13))
+    fig.update_yaxes(gridcolor=COLORS["grid"], tickfont=dict(color=COLORS["text"],size=12), title_font=dict(color=COLORS["text"],size=13))
+    return fig
 
-leader_name = party_leader.iloc[0]["partido"] if not party_leader.empty else "-"
-leader_votes = party_leader.iloc[0]["votos"] if not party_leader.empty else 0
-leader_share = (leader_votes / total_votos * 100) if total_votos > 0 else np.nan
+pagina = st.segmented_control("Vista", ["Nacional", "Distrital"], default="Nacional", label_visibility="collapsed", key="pagina")
+if pagina is None:
+    pagina = "Nacional"
 
-corp_leader = (
-    filtered.groupby("corporacion", as_index=False)["votos"]
-    .sum()
-    .sort_values("votos", ascending=False)
-)
-corp_name = corp_leader.iloc[0]["corporacion"] if not corp_leader.empty else "-"
+# ── NACIONAL ───────────────────────────────────────────────────────
+if pagina == "Nacional":
+    # Slot superior: KPIs + botón borrar selección (se rellena tras leer el mapa para que actualice en el mismo run)
+    kpi_slot = st.container()
+    sel_code_init = st.session_state.sel_depto_map
 
-# =========================================================
-# HEADER
-# =========================================================
-st.title("Dashboard electoral de Colombia")
+    # Fila 1: Mapa deptos + K-means deptos
+    colA, colB = st.columns([1.1, 1])
+    with colA:
+        # Mapa votos por depto — gradiente log para no aplastar por Bogotá (satélite real en pestaña Distrital)
+        dept_agg = flt.groupby("cod_dpto_geo").agg(votos=("votos","sum")).reset_index()
+        g = dept_gdf.merge(dept_agg, left_on="dpto_ccdgo", right_on="cod_dpto_geo", how="left")
+        g["votos"] = g["votos"].fillna(0)
+        g["log_votos"] = np.log1p(g["votos"])
+        fig = px.choropleth(g, geojson=g.__geo_interface__, locations="dpto_ccdgo", featureidkey="properties.dpto_ccdgo",
+                            color="log_votos", hover_name="dpto_cnmbr",
+                            hover_data={"log_votos":False, "votos":True, "dpto_ccdgo":False},
+                            color_continuous_scale=[[0,"#FFF5F5"],[0.35,"#FCA5A5"],[0.65,COLORS["red"]],[1,COLORS["red_dark"]]],
+                            title="Votos por departamento (escala log — clic para filtrar)")
+        fig.update_geos(fitbounds="locations", visible=False)
+        fig.update_layout(height=420, margin=dict(l=0,r=0,t=40,b=0), coloraxis_colorbar=dict(title="log(votos)", tickfont=dict(color=COLORS["text"]), title_font=dict(color=COLORS["text"])))
+        fig.update_layout(font=dict(color=COLORS["text"]))
+        # Interactividad: selección
+        sel = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points")
+        # capturar selección
+        if sel and sel.get("selection",{}).get("points"):
+            try:
+                cc = sel["selection"]["points"][0].get("location")
+                if cc and cc != st.session_state.sel_depto_map:
+                    st.session_state.sel_depto_map = cc
+                    st.rerun()
+            except: pass
+        # Filtro cascada para tablas/evolución/tarjetas (mismo run, sin lag)
+        flt_nac_inter = flt.copy()
+        if st.session_state.sel_depto_map:
+            flt_nac_inter = flt[flt["cod_dpto_geo"] == st.session_state.sel_depto_map]
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-with k1:
-    show_kpi("Total de votos", fmt_int(total_votos))
-with k2:
-    show_kpi("Partidos", fmt_int(total_partidos))
-with k3:
-    show_kpi("Candidatos", fmt_int(total_candidatos))
-with k4:
-    show_kpi("Cobertura territorial", fmt_int(total_departamentos), f"Municipios: {fmt_int(total_municipios)}")
-with k5:
-    show_kpi("Corporaciones", fmt_int(total_corporaciones), f"Líder: {corp_name}")
-with k6:
-    show_kpi("Coalición líder", leader_name, f"{fmt_pct(leader_share)} del total filtrado")
+    with kpi_slot:
+        st.markdown('<div class="page-title">Nacional — Nuevo Liberalismo</div>', unsafe_allow_html=True)
+        if st.session_state.sel_depto_map:
+            _bc1, _bc2 = st.columns([5, 1])
+            with _bc2:
+                if st.button("🔄 Borrar filtros", key="clr_dept_top", use_container_width=True):
+                    st.session_state.sel_depto_map = None
+                    st.rerun()
+        base_kpi = flt_nac_inter if st.session_state.sel_depto_map and not flt_nac_inter.empty else flt
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: kpi("Votos filtrados", fmt(base_kpi["votos"].sum()))
+        with c2: kpi("Departamentos", fmt(base_kpi["departamento"].nunique()), f"de {nl['departamento'].nunique()}")
+        with c3: kpi("Municipios", fmt(base_kpi["municipio"].nunique()))
+        with c4: kpi("Candidatos", fmt(base_kpi["candidato"].nunique()))
+        with c5: kpi("Años", ", ".join(sorted(base_kpi["ano"].dropna().astype(int).astype(str).unique())))
 
-tab1, tab2, tab3 = st.tabs(["Panorama general", "Evolución y competencia", "Territorio y detalle"])
+    with colB:
+        # K-means departamental SIEMPRE sobre flt completo (estable) + resalta el depto del mapa
+        dept_k = flt.groupby("departamento").agg(votos=("votos","sum"), municipios=("municipio","nunique"), cod=("cod_dpto_geo","first")).reset_index()
+        dept_k = dept_k[~dept_k["departamento"].isin(["bogota", "consulados", "sin_dato"])].copy()
+        if len(dept_k) >= 4:
+            dept_k["log_votos"] = np.log1p(dept_k["votos"])
+            X = StandardScaler().fit_transform(dept_k[["log_votos", "municipios"]])
+            km = KMeans(n_clusters=4, n_init=20, random_state=42).fit(X)
+            dept_k["cluster"] = km.labels_.astype(str)
+            _sel = st.session_state.sel_depto_map
+            dept_k["sel"] = (dept_k["cod"] == _sel) if _sel else False
+            dept_k["size"] = np.where(dept_k["sel"], 16, 10)
+            fig2 = px.scatter(dept_k, x="municipios", y="votos", color="cluster", hover_name="departamento",
+                              log_y=True, size="size",
+                              color_discrete_sequence=[COLORS["red"], COLORS["slate"], COLORS["teal"], "#F59E0B"],
+                              title="K-means departamental (K=4, sin Bogotá) — el mapa resalta, no filtra")
+            fig2.update_traces(marker=dict(line=dict(width=1, color="black")))
+            st.plotly_chart(base_layout(fig2, 420), use_container_width=True)
+            st.caption(f"Silhouette: {silhouette_score(X, km.labels_):.2f} — el punto grande es tu selección del mapa")
+        else:
+            st.info("Muy pocos departamentos para clusterizar con filtros actuales.")
 
-# =========================================================
-# TAB 1
-# =========================================================
-with tab1:
-    c1, c2 = st.columns((1.1, 1))
-
+    # Fila 2: Evolución + Corporación
+    c1,c2 = st.columns(2)
     with c1:
-        party_rank = (
-            filtered.groupby("partido", as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(top_n)
-        )
-        if not party_rank.empty:
-            party_rank["Participación %"] = np.where(
-                total_votos > 0,
-                party_rank["votos"] / total_votos * 100,
-                0
-            )
-            xcol = "votos" if metric_mode == "Votos" else "Participación %"
-            xtitle = "Votos" if metric_mode == "Votos" else "Participación (%)"
-
-            fig = px.bar(
-                party_rank.sort_values(xcol, ascending=True),
-                x=xcol,
-                y="partido",
-                orientation="h",
-                text=xcol,
-                title="Ranking de coaliciones",
-                color_discrete_sequence=[COLORS["primary"]]
-            )
-            fig.update_traces(
-                texttemplate="%{text:,.0f}" if metric_mode == "Votos" else "%{text:.2f}%",
-                hovertemplate="<b>%{y}</b><br>" + xtitle + ": %{x}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title=xtitle, yaxis_title="")
-            st.plotly_chart(base_layout(fig, 460, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Ranking de coaliciones", 460), use_container_width=True)
-
+        ev = flt_nac_inter.groupby("ano").agg(votos=("votos","sum")).reset_index().sort_values("ano")
+        fig3 = px.line(ev, x="ano", y="votos", markers=True, title="Evolución temporal del partido", color_discrete_sequence=[COLORS["red"]])
+        fig3.update_traces(line=dict(width=3))
+        st.plotly_chart(base_layout(fig3,360), use_container_width=True)
     with c2:
-        cand_rank = (
-            filtered.groupby("candidato", as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(top_n)
-        )
-        if not cand_rank.empty:
-            cand_rank["Participación %"] = np.where(
-                total_votos > 0,
-                cand_rank["votos"] / total_votos * 100,
-                0
-            )
-            xcol = "votos" if metric_mode == "Votos" else "Participación %"
-            xtitle = "Votos" if metric_mode == "Votos" else "Participación (%)"
+        corp = flt_nac_inter.groupby("corporacion").agg(votos=("votos","sum")).sort_values("votos", ascending=True)
+        fig4 = px.bar(corp, x="votos", y=corp.index, orientation="h", title="Votos por corporación", color_discrete_sequence=[COLORS["red_dark"]])
+        fig4.update_traces(texttemplate="%{x:.2s}", textposition="outside")
+        st.plotly_chart(base_layout(fig4,360), use_container_width=True)
 
-            fig = px.bar(
-                cand_rank.sort_values(xcol, ascending=True),
-                x=xcol,
-                y="candidato",
-                orientation="h",
-                text=xcol,
-                title="Candidatos destacados",
-                color_discrete_sequence=[COLORS["red_soft"]]
-            )
-            fig.update_traces(
-                texttemplate="%{text:,.0f}" if metric_mode == "Votos" else "%{text:.2f}%",
-                hovertemplate="<b>%{y}</b><br>" + xtitle + ": %{x}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title=xtitle, yaxis_title="")
-            st.plotly_chart(base_layout(fig, 460, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Candidatos destacados", 460), use_container_width=True)
+    # Fila 3: Tablas
+    t1,t2 = st.columns(2)
+    with t1:
+        cand = flt_nac_inter.groupby("candidato").agg(votos=("votos","sum"), municipios=("municipio","nunique"), registros=("votos","size")).sort_values("votos", ascending=False).head(top_n)
+        st.markdown("**Top candidatos (filtrado)**")
+        st.dataframe(cand, use_container_width=True)
+    with t2:
+        mun = flt_nac_inter.groupby(["municipio","departamento"]).agg(votos=("votos","sum"), candidatos=("candidato","nunique")).sort_values("votos", ascending=False).head(top_n)
+        st.markdown("**Top municipios (filtrado)**")
+        st.dataframe(mun, use_container_width=True)
 
-    c3, c4 = st.columns((1, 1))
+# ── DISTRITAL ──────────────────────────────────────────────────────
+if pagina == "Distrital":
+    st.markdown('<div class="page-title">Distrital — Carlos Fernando Galán (Bogotá)</div>', unsafe_allow_html=True)
+    c1,c2,c3,c4 = st.columns(4)
+    with c1: kpi("Votos Galán", fmt(gal_flt["votacion"].sum()))
+    with c2: kpi("Localidades", fmt(gal_flt["localidad"].nunique()))
+    with c3: kpi("UPZ", fmt(gal_flt["upz"].nunique()))
+    with c4: kpi("Puestos", fmt(gal_flt["lugar"].nunique()))
 
-    with c3:
-        trend_total = (
-            filtered.groupby("Año electoral", as_index=False)["votos"]
-            .sum()
-            .sort_values("Año electoral")
-        )
-        if not trend_total.empty:
-            fig = px.line(
-                trend_total,
-                x="Año electoral",
-                y="votos",
-                markers=True,
-                title="Total de votos por Año electoral",
-                color_discrete_sequence=[COLORS["red"]]
-            )
-            fig.update_traces(
-                line=dict(width=3),
-                marker=dict(size=8),
-                hovertemplate="<b>Año electoral %{x}</b><br>Votos: %{y:,.0f}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title="Año electoral", yaxis_title="Votos")
-            st.plotly_chart(base_layout(fig, 430, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Total de votos por Año electoral", 430), use_container_width=True)
-
-    with c4:
-        corp_df = (
-            filtered.groupby("corporacion", as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-        )
-        if not corp_df.empty:
-            fig = px.treemap(
-                corp_df,
-                path=["corporacion"],
-                values="votos",
-                color="votos",
-                color_continuous_scale="RdPu",
-                title="Peso relativo por corporación"
-            )
-            fig.update_layout(
-                title=dict(text="Peso relativo por corporación", font=dict(size=18, color=COLORS["text"])),
-                paper_bgcolor=COLORS["card"],
-                plot_bgcolor=COLORS["card"],
-                margin=dict(l=10, r=10, t=55, b=10),
-                font=dict(color=COLORS["text"])
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Peso relativo por corporación"), use_container_width=True)
-
-    c5, c6 = st.columns((1, 1))
-
-    with c5:
-        dept_rank = (
-            filtered.groupby("departamento", as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(top_n)
-        )
-        if not dept_rank.empty:
-            fig = px.bar(
-                dept_rank.sort_values("votos", ascending=True),
-                x="votos",
-                y="departamento",
-                orientation="h",
-                text="votos",
-                title="Departamentos con mayor votación",
-                color_discrete_sequence=[COLORS["secondary"]]
-            )
-            fig.update_traces(
-                texttemplate="%{text:,.0f}",
-                hovertemplate="<b>%{y}</b><br>Votos: %{x}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title="Votos", yaxis_title="")
-            st.plotly_chart(base_layout(fig, 420, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Departamentos con mayor votación", 420), use_container_width=True)
-
-    with c6:
-        mun_rank_tab1 = (
-            filtered.groupby(["municipio", "departamento"], as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(top_n)
-        )
-        if not mun_rank_tab1.empty:
-            mun_rank_tab1["label"] = mun_rank_tab1["municipio"] + " | " + mun_rank_tab1["departamento"]
-            fig = px.bar(
-                mun_rank_tab1.sort_values("votos", ascending=True),
-                x="votos",
-                y="label",
-                orientation="h",
-                text="votos",
-                title="Ranking de municipios",
-                color_discrete_sequence=[COLORS["red"]]
-            )
-            fig.update_traces(
-                texttemplate="%{text:,.0f}",
-                hovertemplate="<b>%{y}</b><br>Votos: %{x}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title="Votos", yaxis_title="")
-            st.plotly_chart(base_layout(fig, 420, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Ranking de municipios", 420), use_container_width=True)
-
-# =========================================================
-# TAB 2
-# =========================================================
-with tab2:
-    c1, c2 = st.columns((1.05, 0.95))
-
-    with c1:
-        corp_top3 = (
-            filtered.groupby("corporacion", as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(3)["corporacion"]
-            .tolist()
-        )
-        trend_top3 = (
-            filtered[filtered["corporacion"].isin(corp_top3)]
-            .groupby(["Año electoral", "corporacion"], as_index=False)["votos"]
-            .sum()
-            .sort_values(["Año electoral", "votos"], ascending=[True, False])
-        )
-
-        if not trend_top3.empty:
-            fig = px.line(
-                trend_top3,
-                x="Año electoral",
-                y="votos",
-                color="corporacion",
-                markers=True,
-                title="Evolución electoral de las 3 corporaciones líderes",
-                color_discrete_sequence=[COLORS["primary"], COLORS["red"], COLORS["amber"]]
-            )
-            fig.update_traces(
-                line=dict(width=3),
-                marker=dict(size=8),
-                hovertemplate="<b>%{fullData.name}</b><br>Año electoral: %{x}<br>Votos: %{y:,.0f}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title="Año electoral", yaxis_title="Votos")
-            st.plotly_chart(base_layout(fig, 450, show_legend=True), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Evolución electoral de las 3 corporaciones líderes", 450), use_container_width=True)
-
-    with c2:
-        corp_year = (
-            filtered.groupby(["Año electoral", "corporacion"], as_index=False)["votos"]
-            .sum()
-        )
-        if not corp_year.empty:
-            fig = px.bar(
-                corp_year,
-                x="Año electoral",
-                y="votos",
-                color="corporacion",
-                barmode="group",
-                title="Comparación por corporación y Año electoral",
-                color_discrete_sequence=[COLORS["primary"], COLORS["red"], COLORS["amber"], COLORS["secondary"], COLORS["accent"]]
-            )
-            fig.update_layout(xaxis_title="Año electoral", yaxis_title="Votos")
-            st.plotly_chart(base_layout(fig, 430, show_legend=True), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Comparación por corporación y Año electoral", 430), use_container_width=True)
-
-    heat = (
-        filtered.groupby(["partido", "corporacion"], as_index=False)["votos"]
-        .sum()
-    )
-    if not heat.empty:
-        heat_pivot = heat.pivot(index="partido", columns="corporacion", values="votos").fillna(0)
-        fig = px.imshow(
-            heat_pivot,
-            aspect="auto",
-            color_continuous_scale="RdPu",
-            labels=dict(x="Corporación", y="Coalición", color="Votos"),
-            text_auto=".2s"
-        )
-        fig.update_traces(
-            textfont=dict(size=11, color=COLORS["text"]),
-            hovertemplate="Coalición: %{y}<br>Corporación: %{x}<br>Votos: %{z:,.0f}<extra></extra>"
-        )
-        fig.update_layout(
-            title=dict(
-                text="Matriz de votos: coalición vs corporación",
-                font=dict(size=18, color=COLORS["text"])
-            ),
-            paper_bgcolor=COLORS["card"],
-            plot_bgcolor=COLORS["card"],
-            font=dict(color=COLORS["text"]),
-            margin=dict(l=20, r=20, t=80, b=20),
-            height=560,
-            coloraxis_colorbar=dict(
-                title=dict(
-                    text="Votos",
-                    font=dict(size=13, color=COLORS["text"])
-                ),
-                tickfont=dict(size=12, color=COLORS["text"])
-            )
-        )
-        fig.update_xaxes(
-            side="bottom",
-            tickfont=dict(size=12, color=COLORS["text"]),
-            title=dict(text="Corporación", font=dict(size=13, color=COLORS["text"]))
-        )
-        fig.update_yaxes(
-            tickfont=dict(size=12, color=COLORS["text"]),
-            title=dict(text="Coalición", font=dict(size=13, color=COLORS["text"]))
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # Preparar agregados para mapa y K-means
+    upz_agg = gal_flt.groupby("upz").agg(votos=("votacion","sum"), puestos=("votacion","count"), lat=("latitud","mean"), lon=("longitud","mean")).reset_index().dropna(subset=["lat","lon"])
+    upz_agg["votos_por_puesto"]=upz_agg["votos"]/upz_agg["puestos"]
+    # K-means UPZ (votos/puestos) K=4
+    if len(upz_agg) >= 4:
+        feat = upz_agg[["votos","puestos","votos_por_puesto"]].copy()
+        feat["log_votos"]=np.log1p(feat["votos"])
+        Xup = StandardScaler().fit_transform(feat[["log_votos","puestos","votos_por_puesto"]])
+        km_up = KMeans(n_clusters=4, n_init=30, random_state=42).fit(Xup)
+        upz_agg["cluster"]=km_up.labels_.astype(str)
     else:
-        st.plotly_chart(empty_fig("Matriz de votos: coalición vs corporación", 560), use_container_width=True)
+        upz_agg["cluster"]="0"
 
-# =========================================================
-# TAB 3
-# =========================================================
-with tab3:
-    c1, c2 = st.columns((1, 1))
+    # HDBSCAN sobre puestos (full gal para capa, no filtrado para estabilidad)
+    @st.cache_data(show_spinner=False)
+    def hdb_labels(df):
+        pts = df.dropna(subset=["latitud","longitud"])
+        if len(pts)<10:
+            return pd.Series([], dtype=int)
+        coords = np.radians(pts[["latitud","longitud"]].values)
+        cl = hdbscan.HDBSCAN(min_cluster_size=8, min_samples=3, metric="haversine").fit_predict(coords)
+        s=pd.Series(cl, index=pts.index)
+        return s
+    hdb = hdb_labels(gal)
+    gal_hdb = gal.copy()
+    gal_hdb["hdb"]=hdb.reindex(gal.index).fillna(-1).astype(int)
 
+    # Mapa Folium
+    st.markdown("**Mapa — activa/desactiva capas y haz clic para filtrar**")
+    try:
+        lat_c = float(gal_flt["latitud"].dropna().mean())
+        lon_c = float(gal_flt["longitud"].dropna().mean())
+        if pd.isna(lat_c) or pd.isna(lon_c):
+            raise ValueError("sin coords")
+        center = [lat_c, lon_c]
+        m = folium.Map(location=center, zoom_start=11, control_scale=True)
+        # Tiles sin API key (CartoDB ahora exige key y sale en blanco)
+        folium.TileLayer("OpenStreetMap", name="Calle").add_to(m)
+        folium.TileLayer(tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", name="Satélite").add_to(m)
+
+        # UPZ choropleth (join normalizado: shape MAYUS vs parquet minusculas)
+        if "nk" not in upz_gdf.columns:
+            upz_gdf["nk"] = upz_gdf["nombre"].apply(norm_key)
+        upz_agg["nk"] = upz_agg["upz"].apply(norm_key)
+        upz_join = upz_gdf.merge(upz_agg[["nk", "upz", "votos"]], on="nk", how="left")
+        # normalizar votos para color
+        maxv = upz_join["votos"].max() if upz_join["votos"].notna().any() else 1
+        def style_upz(f):
+            v=f["properties"].get("votos")
+            if pd.isna(v) or v==0:
+                return {"fillColor":"#F0F0F0","color":"#333","weight":1,"fillOpacity":0.5}
+            norm=v/maxv
+            col = "#7C2D12" if norm>0.7 else "#B42318" if norm>0.4 else "#FCA5A5"
+            return {"fillColor":col,"color":"#333","weight":1,"fillOpacity":0.7}
+        fg_upz=folium.FeatureGroup(name="Votos por UPZ", show=True)
+        folium.GeoJson(upz_join.__geo_interface__, style_function=style_upz,
+            tooltip=folium.GeoJsonTooltip(fields=["nombre","votos"], aliases=["UPZ","Votos"], localize=True)).add_to(fg_upz)
+        fg_upz.add_to(m)
+
+        # Localidad choropleth (join normalizado + alias la candelaria)
+        loc_agg = gal_flt.groupby("localidad").agg(votos=("votacion","sum")).reset_index()
+        if "nk" not in loc_gdf.columns:
+            loc_gdf["nk"] = loc_gdf["LocNombre"].apply(norm_key)
+        loc_agg["nk"] = loc_agg["localidad"].apply(norm_key).replace({"la candelaria": "candelaria"})
+        loc_join = loc_gdf.merge(loc_agg[["nk", "localidad", "votos"]], on="nk", how="left")
+        maxv2 = loc_join["votos"].max() if loc_join["votos"].notna().any() else 1
+        def style_loc(f):
+            v=f["properties"].get("votos")
+            if pd.isna(v): return {"fillColor":"#F0F0F0","color":"#111","weight":2,"fillOpacity":0.3}
+            norm=v/maxv2
+            col="#7C2D12" if norm>0.7 else "#B42318" if norm>0.4 else "#FCA5A5"
+            return {"fillColor":col,"color":"#111","weight":2,"fillOpacity":0.4}
+        fg_loc=folium.FeatureGroup(name="Votos por localidad", show=False)
+        folium.GeoJson(loc_join.__geo_interface__, style_function=style_loc,
+            tooltip=folium.GeoJsonTooltip(fields=["LocNombre","votos"], aliases=["Localidad","Votos"])).add_to(fg_loc)
+        fg_loc.add_to(m)
+
+        # Puestos: color por votos
+        puestos = gal_flt.groupby(["lugar","localidad","latitud","longitud"]).agg(votos=("votacion","sum")).reset_index().dropna(subset=["latitud","longitud"])
+        # limitar a 600 más votados si hay muchos para velocidad
+        if len(puestos)>600:
+            puestos = puestos.nlargest(600, "votos")
+        # escala color
+        q = puestos["votos"].quantile([0.33,0.66]).values
+        def col_p(v):
+            if v>q[1]: return COLORS["red_dark"]
+            if v>q[0]: return COLORS["red"]
+            return "#FCA5A5"
+        fg_p = folium.FeatureGroup(name="Votos por puesto", show=True)
+        for _,r in puestos.iterrows():
+            folium.CircleMarker(location=[r["latitud"],r["longitud"]], radius=4+ min(6, r["votos"]/3000),
+                color=col_p(r["votos"]), fill=True, fillColor=col_p(r["votos"]), fillOpacity=0.8, weight=1,
+                popup=f"{r['lugar']}<br>{r['localidad']}<br>Votos: {int(r['votos'])}",
+                tooltip=r["lugar"]).add_to(fg_p)
+        fg_p.add_to(m)
+
+        # HDBSCAN capa
+        pts_hdb = gal_hdb[gal_hdb["hdb"]!=-1].groupby(["lugar","latitud","longitud"]).agg(votos=("votacion","sum"), hdb=("hdb","first")).reset_index().dropna()
+        fg_hdb=folium.FeatureGroup(name="HDBSCAN clusters", show=False)
+        cmap=plt.cm.tab20
+        for cid in sorted(pts_hdb["hdb"].unique())[:12]:
+            sub=pts_hdb[pts_hdb["hdb"]==cid]
+            col = matplotlib.colors.to_hex(cmap(int(cid)%20))
+            for _,r in sub.iterrows():
+                folium.CircleMarker(location=[r["latitud"],r["longitud"]], radius=5, color=col, fill=True, fillColor=col, fillOpacity=0.9, weight=1,
+                    popup=f"Cluster {cid}<br>{r['lugar']}").add_to(fg_hdb)
+        fg_hdb.add_to(m)
+
+        folium.LayerControl(collapsed=False).add_to(m)
+        map_data = st_folium(m, height=520, use_container_width=True, returned_objects=["last_object_clicked"])
+        if map_data and map_data.get("last_object_clicked"):
+            st.session_state.sel_upz = map_data["last_object_clicked"].get("properties",{}).get("nombre") or map_data["last_object_clicked"].get("tooltip")
+            if st.session_state.sel_upz:
+                st.caption(f"Selección mapa: {st.session_state.sel_upz} — filtra K-means y tabla")
+                if st.button("Limpiar selección mapa"):
+                    st.session_state.sel_upz=None; st.rerun()
+    except Exception as e:
+        st.error(f"Mapa no disponible: {e}")
+
+    # K-means UPZ gráfico
+    c1,c2 = st.columns([1,1])
     with c1:
-        dept_rank2 = (
-            filtered.groupby("departamento", as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(top_n)
-        )
-        if not dept_rank2.empty:
-            fig = px.bar(
-                dept_rank2.sort_values("votos", ascending=True),
-                x="votos",
-                y="departamento",
-                orientation="h",
-                text="votos",
-                title="Ranking departamental",
-                color_discrete_sequence=[COLORS["primary"]]
-            )
-            fig.update_traces(
-                texttemplate="%{text:,.0f}",
-                hovertemplate="<b>%{y}</b><br>Votos: %{x}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title="Votos", yaxis_title="")
-            st.plotly_chart(base_layout(fig, 500, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Ranking departamental", 500), use_container_width=True)
-
+        figk = px.scatter(upz_agg, x="puestos", y="votos", color="cluster", hover_name="upz",
+                          color_discrete_sequence=[COLORS["red"],COLORS["slate"],COLORS["teal"],"#F59E0B"],
+                          title="K-means UPZ (K=4) — puestos vs votos", log_y=True)
+        figk.update_traces(marker=dict(size=9, line=dict(width=1,color="black")))
+        st.plotly_chart(base_layout(figk,380), use_container_width=True)
+        # filtrar tabla si hay selección
+        upz_show = upz_agg.copy()
+        if st.session_state.sel_upz:
+            # intentar filtrar por upz o localidad coincidente
+            q = norm_key(st.session_state.sel_upz)
+            mask = upz_show["upz"].fillna("").astype(str).apply(norm_key).str.contains(q, na=False)
+            if mask.any():
+                upz_show = upz_show[mask]
     with c2:
-        mun_rank = (
-            filtered.groupby(["municipio", "departamento"], as_index=False)["votos"]
-            .sum()
-            .sort_values("votos", ascending=False)
-            .head(top_n)
-        )
-        if not mun_rank.empty:
-            mun_rank["label"] = mun_rank["municipio"] + " | " + mun_rank["departamento"]
-            fig = px.bar(
-                mun_rank.sort_values("votos", ascending=True),
-                x="votos",
-                y="label",
-                orientation="h",
-                text="votos",
-                title="Municipios con mayor votación",
-                color_discrete_sequence=[COLORS["red"]]
-            )
-            fig.update_traces(
-                texttemplate="%{text:,.0f}",
-                hovertemplate="<b>%{y}</b><br>Votos: %{x}<extra></extra>"
-            )
-            fig.update_layout(xaxis_title="Votos", yaxis_title="")
-            st.plotly_chart(base_layout(fig, 500, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Municipios con mayor votación", 500), use_container_width=True)
+        puestos_tbl = gal_flt.groupby(["lugar","localidad","upz"]).agg(votos=("votacion","sum"), anos=("ano","nunique"), registros=("votacion","size")).sort_values("votos", ascending=False).head(top_n*2)
+        if st.session_state.sel_upz and not puestos_tbl.empty:
+            # filtrar por selección (normalizado, tolera NaN)
+            q = norm_key(st.session_state.sel_upz)
+            lvl_upz = puestos_tbl.index.get_level_values("upz").astype(str).map(norm_key)
+            lvl_loc = puestos_tbl.index.get_level_values("localidad").astype(str).map(norm_key)
+            mask = pd.Series(lvl_upz, index=puestos_tbl.index).str.contains(q, na=False) | pd.Series(lvl_loc, index=puestos_tbl.index).str.contains(q, na=False)
+            if mask.any():
+                puestos_tbl = puestos_tbl[mask.values]
+        st.markdown("**Puestos de votación (filtrado)**")
+        st.dataframe(puestos_tbl, use_container_width=True, height=380)
 
-    c3 = st.columns(1)[0]
-
-    with c3:
-        territory = (
-            filtered.groupby("departamento", as_index=False)
-            .agg(
-                votos=("votos", "sum"),
-                municipios=("municipio", "nunique"),
-                candidatos=("candidato", "nunique"),
-                coaliciones=("partido", "nunique")
-            )
-        )
-
-        if not territory.empty:
-            fig = px.scatter(
-                territory,
-                x="municipios",
-                y="votos",
-                size="candidatos",
-                color="coaliciones",
-                hover_name="departamento",
-                labels={
-                    "municipios": "Municipios con presencia",
-                    "votos": "Votos",
-                    "coaliciones": "Número de coaliciones",
-                    "candidatos": "Número de candidatos"
-                },
-                color_continuous_scale="RdPu"
-            )
-            fig.update_traces(
-                hovertemplate=(
-                    "<b>%{hovertext}</b><br>"
-                    "Municipios: %{x}<br>"
-                    "Votos: %{y:,.0f}<br>"
-                    "Candidatos: %{marker.size}<extra></extra>"
-                )
-            )
-            fig.update_layout(title="Concentración territorial del voto")
-            st.plotly_chart(base_layout(fig, 500, show_legend=False), use_container_width=True)
-        else:
-            st.plotly_chart(empty_fig("Concentración territorial del voto", 500), use_container_width=True)
-
-    territory_matrix = (
-        filtered.groupby(["departamento", "corporacion"], as_index=False)["votos"]
-        .sum()
-    )
-    if not territory_matrix.empty:
-        pivot_territory = territory_matrix.pivot(
-            index="departamento",
-            columns="corporacion",
-            values="votos"
-        ).fillna(0)
-
-        fig = px.imshow(
-            pivot_territory,
-            aspect="auto",
-            color_continuous_scale="RdPu",
-            labels=dict(x="Corporación", y="Departamento", color="Votos")
-        )
-        fig.update_layout(
-            title=dict(
-                text="Matriz territorial: departamento vs corporación",
-                font=dict(size=18, color=COLORS["text"])
-            ),
-            paper_bgcolor=COLORS["card"],
-            plot_bgcolor=COLORS["card"],
-            font=dict(color=COLORS["text"]),
-            margin=dict(l=20, r=20, t=80, b=20),
-            height=560,
-            coloraxis_colorbar=dict(
-                title=dict(
-                    text="Votos",
-                    font=dict(size=13, color=COLORS["text"])
-                ),
-                tickfont=dict(size=12, color=COLORS["text"])
-            )
-        )
-        fig.update_xaxes(
-            side="bottom",
-            tickfont=dict(size=12, color=COLORS["text"]),
-            title=dict(text="Corporación", font=dict(size=13, color=COLORS["text"]))
-        )
-        fig.update_yaxes(
-            tickfont=dict(size=12, color=COLORS["text"]),
-            title=dict(text="Departamento", font=dict(size=13, color=COLORS["text"]))
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.plotly_chart(empty_fig("Matriz territorial: departamento vs corporación", 560), use_container_width=True)
-
-    st.markdown("### Detalle analítico")
-
-    detail = (
-        filtered.groupby(
-            ["Año electoral", "corporacion", "partido", "candidato", "departamento", "municipio"],
-            as_index=False
-        )["votos"]
-        .sum()
-        .sort_values("votos", ascending=False)
-    )
-    detail["Participación %"] = np.where(total_votos > 0, detail["votos"] / total_votos * 100, 0)
-
-    detail = detail.rename(columns={
-        "corporacion": "Corporación",
-        "partido": "Coalición",
-        "candidato": "Candidato",
-        "departamento": "Departamento",
-        "municipio": "Municipio",
-        "votos": "Votos"
-    })
-
-    st.dataframe(detail, use_container_width=True, hide_index=True)
-
-    csv = detail.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "Descargar detalle filtrado en CSV",
-        data=csv,
-        file_name="detalle_electoral_filtrado.csv",
-        mime="text/csv"
-    )
+    st.caption("Filtros globales + clic en mapa filtran gráficos y tablas. Capas del mapa son solo visibilidad.")
