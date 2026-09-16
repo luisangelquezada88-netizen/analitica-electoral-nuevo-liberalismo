@@ -11,11 +11,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import folium
+from folium.plugins import HeatMap, MarkerCluster, Fullscreen, MiniMap
 from streamlit_folium import st_folium
 import hdbscan
-import matplotlib
-import matplotlib.pyplot as plt
 from unidecode import unidecode
+
+HDB_PAL = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF", "#FF6B6B",
+           "#4ECDC4", "#FFD166", "#06D6A0", "#118AB2", "#073B4C", "#EF476F", "#1B998B",
+           "#2D3047", "#FF9A00", "#9D4EDD", "#3A86FF", "#FB5607", "#8338EC", "#00BFFF"]
 
 def norm_key(s):
     if pd.isna(s):
@@ -39,18 +42,11 @@ h1,h2,h3,[data-testid="stSubheader"] h3,[data-testid="stHeader"]{{color:{COLORS[
 .page-title{{color:{COLORS["text"]} !important;font-size:1.6rem;font-weight:800;letter-spacing:-0.02em;margin:0.2rem 0 0.6rem 0}}
 .kpi{{background:{COLORS["card"]};border:1px solid {COLORS["grid"]};border-radius:14px;padding:14px 16px;box-shadow:0 2px 8px rgba(0,0,0,0.04)}}
 .kpi-label{{color:{COLORS["muted"]};font-size:0.82rem}}.kpi-value{{color:{COLORS["text"]};font-size:1.55rem;font-weight:700}} .kpi-sub{{color:{COLORS["muted"]};font-size:0.78rem}}
-/* Selector de página: botones grandes */
-[data-testid="stSegmentedControl"] {{margin:0.2rem 0 0.4rem 0}}
-[data-testid="stSegmentedControl"] button {{
-  font-size:1.05rem !important;font-weight:800 !important;letter-spacing:0.03em;
-  padding:10px 34px !important;border:2px solid {COLORS["red"]} !important;border-radius:12px !important;
-  color:{COLORS["red"]} !important;background:{COLORS["card"]} !important;
-}}
-[data-testid="stSegmentedControl"] button[aria-pressed="true"] {{
-  background:{COLORS["red"]} !important;color:white !important;border-color:{COLORS["red_dark"]} !important;
-  box-shadow:0 4px 12px rgba(180,35,24,0.35);
-}}
-[data-testid="stSegmentedControl"] button p {{font-size:1.05rem !important;font-weight:800 !important;margin:0 !important}}
+/* Navegación principal: dos botones grandes imposibles de pasar por alto */
+.nav-title{{color:{COLORS["text"]} !important;font-size:1.15rem;font-weight:800;letter-spacing:0.02em;margin:0.4rem 0 0.2rem 0;text-align:center}}
+[data-testid="stButton"] button{{font-weight:700 !important;border-radius:12px !important}}
+[data-testid="stButton"] button[kind="primary"]{{background-color:{COLORS["red"]} !important;border-color:{COLORS["red_dark"]} !important;color:white !important;font-size:1.1rem !important;padding:0.7rem 1rem !important;box-shadow:0 4px 12px rgba(180,35,24,0.35)}}
+[data-testid="stButton"] button[kind="secondary"]{{font-size:1.0rem !important;padding:0.6rem 1rem !important}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -146,9 +142,23 @@ def base_layout(fig,h=380):
     fig.update_yaxes(gridcolor=COLORS["grid"], tickfont=dict(color=COLORS["text"],size=12), title_font=dict(color=COLORS["text"],size=13))
     return fig
 
-pagina = st.segmented_control("Vista", ["Nacional", "Distrital"], default="Nacional", label_visibility="collapsed", key="pagina")
-if pagina is None:
-    pagina = "Nacional"
+if "pagina" not in st.session_state or st.session_state.pagina not in ("Nacional", "Distrital"):
+    st.session_state.pagina = "Nacional"
+st.markdown("<div class='nav-title'>Selecciona la vista del tablero</div>", unsafe_allow_html=True)
+nav_a, nav_b = st.columns(2)
+with nav_a:
+    if st.button("🗺️ NACIONAL — Partido", key="nav_nac",
+                 type="primary" if st.session_state.pagina == "Nacional" else "secondary",
+                 use_container_width=True):
+        st.session_state.pagina = "Nacional"
+        st.rerun()
+with nav_b:
+    if st.button("🏙️ DISTRITAL — Galán Bogotá", key="nav_dis",
+                 type="primary" if st.session_state.pagina == "Distrital" else "secondary",
+                 use_container_width=True):
+        st.session_state.pagina = "Distrital"
+        st.rerun()
+pagina = st.session_state.pagina
 
 # ── NACIONAL ───────────────────────────────────────────────────────
 if pagina == "Nacional":
@@ -164,16 +174,27 @@ if pagina == "Nacional":
         g = dept_gdf.merge(dept_agg, left_on="dpto_ccdgo", right_on="cod_dpto_geo", how="left")
         g["votos"] = g["votos"].fillna(0)
         g["log_votos"] = np.log1p(g["votos"])
+        # Croquis departamental: perímetro integrado a la página, sin fondo ni zoom.
+        # Fondo transparente (paper + geo) para que se funda con la página; zoom bloqueado
+        # con projection minscale=maxscale=1 (Plotly 7.x) + config sin barra/scroll/doble-clic.
+        # El clic para filtrar se conserva (on_select).
         fig = px.choropleth(g, geojson=g.__geo_interface__, locations="dpto_ccdgo", featureidkey="properties.dpto_ccdgo",
                             color="log_votos", hover_name="dpto_cnmbr",
                             hover_data={"log_votos":False, "votos":True, "dpto_ccdgo":False},
                             color_continuous_scale=[[0,"#FFF5F5"],[0.35,"#FCA5A5"],[0.65,COLORS["red"]],[1,COLORS["red_dark"]]],
                             title="Votos por departamento (escala log — clic para filtrar)")
-        fig.update_geos(fitbounds="locations", visible=False)
-        fig.update_layout(height=420, margin=dict(l=0,r=0,t=40,b=0), coloraxis_colorbar=dict(title="log(votos)", tickfont=dict(color=COLORS["text"]), title_font=dict(color=COLORS["text"])))
+        fig.update_geos(fitbounds="locations", visible=False, showframe=False,
+                        showcoastlines=False, showland=False, showocean=False,
+                        bgcolor="rgba(0,0,0,0)",
+                        projection=dict(scale=1, minscale=1, maxscale=1))
+        fig.update_layout(height=420, margin=dict(l=0,r=0,t=40,b=0), dragmode=False,
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            coloraxis_colorbar=dict(title="log(votos)", bgcolor="rgba(0,0,0,0)",
+                tickfont=dict(color=COLORS["text"]), title_font=dict(color=COLORS["text"])))
         fig.update_layout(font=dict(color=COLORS["text"]))
-        # Interactividad: selección
-        sel = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points")
+        # Interactividad: selección (sin zoom: config bloquea barra, rueda y doble-clic)
+        sel = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points",
+            config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False, "showTips": False})
         # capturar selección
         if sel and sel.get("selection",{}).get("points"):
             try:
@@ -271,19 +292,29 @@ if pagina == "Distrital":
     else:
         upz_agg["cluster"]="0"
 
-    # HDBSCAN sobre puestos (full gal para capa, no filtrado para estabilidad)
+    # HDBSCAN a nivel registro = modelo galan.ipynb (full gal, no filtrado, para estabilidad).
+    # Cada fila puesto-año vota en la densidad: los duplicados por año pesan y emergen ~48 clusters.
+    # prediction_data=False da las mismas etiquetas ~1000x más rápido.
     @st.cache_data(show_spinner=False)
     def hdb_labels(df):
-        pts = df.dropna(subset=["latitud","longitud"])
-        if len(pts)<10:
+        pts = df.dropna(subset=["latitud", "longitud"])
+        if len(pts) < 20:
             return pd.Series([], dtype=int)
-        coords = np.radians(pts[["latitud","longitud"]].values)
-        cl = hdbscan.HDBSCAN(min_cluster_size=8, min_samples=3, metric="haversine").fit_predict(coords)
-        s=pd.Series(cl, index=pts.index)
+        coords = np.radians(pts[["latitud", "longitud"]].values)
+        cl = hdbscan.HDBSCAN(min_cluster_size=20, min_samples=5, metric="haversine",
+                             cluster_selection_method="eom", prediction_data=False).fit_predict(coords)
+        s = pd.Series(cl, index=pts.index)
         return s
     hdb = hdb_labels(gal)
     gal_hdb = gal.copy()
-    gal_hdb["hdb"]=hdb.reindex(gal.index).fillna(-1).astype(int)
+    gal_hdb["hdb"] = hdb.reindex(gal.index).fillna(-1).astype(int)
+    # Agregado por puesto con cluster por moda (puente al visor)
+    _moda = gal_hdb.groupby(["lugar", "latitud", "longitud"])["hdb"].apply(
+        lambda s: s.mode().iloc[0] if not s.mode().empty else -1).reset_index()
+    puesto_hdb = gal_hdb.groupby(["lugar", "latitud", "longitud"], as_index=False).agg(
+        votos=("votacion", "sum"), anos=("ano", "nunique"),
+        upz=("upz", "first"), localidad=("localidad", "first")).merge(_moda, on=["lugar", "latitud", "longitud"], how="left")
+    puesto_hdb["hdb"] = puesto_hdb["hdb"].fillna(-1).astype(int)
 
     # Mapa Folium
     st.markdown("**Mapa — activa/desactiva capas y haz clic para filtrar**")
@@ -335,38 +366,66 @@ if pagina == "Distrital":
             tooltip=folium.GeoJsonTooltip(fields=["LocNombre","votos"], aliases=["Localidad","Votos"])).add_to(fg_loc)
         fg_loc.add_to(m)
 
-        # Puestos: color por votos
-        puestos = gal_flt.groupby(["lugar","localidad","latitud","longitud"]).agg(votos=("votacion","sum")).reset_index().dropna(subset=["latitud","longitud"])
+        # Puestos: cuartiles de voto → color, radio proporcional (estilo galan.ipynb)
+        puestos = gal_flt.groupby(["lugar", "localidad", "latitud", "longitud"]).agg(
+            votos=("votacion", "sum"), anos=("ano", "nunique"), upz=("upz", "first")).reset_index().dropna(subset=["latitud", "longitud"])
         # limitar a 600 más votados si hay muchos para velocidad
-        if len(puestos)>600:
+        if len(puestos) > 600:
             puestos = puestos.nlargest(600, "votos")
-        # escala color
-        q = puestos["votos"].quantile([0.33,0.66]).values
+        pmax = puestos["votos"].max() if len(puestos) else 1
         def col_p(v):
-            if v>q[1]: return COLORS["red_dark"]
-            if v>q[0]: return COLORS["red"]
-            return "#FCA5A5"
+            qq = v / pmax
+            if qq > 0.75:
+                return "#FF0000"
+            if qq > 0.5:
+                return "#FF9900"
+            if qq > 0.25:
+                return "#00AA00"
+            return "#0066CC"
         fg_p = folium.FeatureGroup(name="Votos por puesto", show=True)
-        for _,r in puestos.iterrows():
-            folium.CircleMarker(location=[r["latitud"],r["longitud"]], radius=4+ min(6, r["votos"]/3000),
-                color=col_p(r["votos"]), fill=True, fillColor=col_p(r["votos"]), fillOpacity=0.8, weight=1,
-                popup=f"{r['lugar']}<br>{r['localidad']}<br>Votos: {int(r['votos'])}",
-                tooltip=r["lugar"]).add_to(fg_p)
+        for _, r in puestos.iterrows():
+            _q = r["votos"] / pmax
+            _upz = r["upz"] if pd.notna(r["upz"]) else "N/A"
+            folium.CircleMarker(location=[r["latitud"], r["longitud"]], radius=4 + _q * 8,
+                color=col_p(r["votos"]), fill=True, fillColor=col_p(r["votos"]), fillOpacity=0.7, weight=1.5,
+                popup=f"{r['lugar']}<br>Votos: {int(r['votos']):,}<br>Años: {int(r['anos'])}<br>UPZ: {_upz}<br>{r['localidad']}",
+                tooltip=f"{r['lugar']}: {int(r['votos']):,} votos").add_to(fg_p)
         fg_p.add_to(m)
 
-        # HDBSCAN capa
-        pts_hdb = gal_hdb[gal_hdb["hdb"]!=-1].groupby(["lugar","latitud","longitud"]).agg(votos=("votacion","sum"), hdb=("hdb","first")).reset_index().dropna()
-        fg_hdb=folium.FeatureGroup(name="HDBSCAN clusters", show=False)
-        cmap=plt.cm.tab20
-        for cid in sorted(pts_hdb["hdb"].unique())[:12]:
-            sub=pts_hdb[pts_hdb["hdb"]==cid]
-            col = matplotlib.colors.to_hex(cmap(int(cid)%20))
-            for _,r in sub.iterrows():
-                folium.CircleMarker(location=[r["latitud"],r["longitud"]], radius=5, color=col, fill=True, fillColor=col, fillOpacity=0.9, weight=1,
-                    popup=f"Cluster {cid}<br>{r['lugar']}").add_to(fg_hdb)
+        # HDBSCAN: un MarkerCluster por cluster con votos totales + marcadores tamaño/color por votos
+        clu = puesto_hdb[puesto_hdb["hdb"] != -1]
+        vmax = clu["votos"].max() if len(clu) else 1
+        fg_hdb = folium.FeatureGroup(name="HDBSCAN clusters", show=False)
+        for cid, sub in clu.groupby("hdb"):
+            if len(sub) < 2:
+                continue
+            col = HDB_PAL[int(cid) % len(HDB_PAL)]
+            tot = sub["votos"].sum()
+            mc = MarkerCluster(name=f"Cluster {cid}",
+                               options={"showCoverageOnHover": False, "zoomToBoundsOnClick": True,
+                                        "spiderfyOnMaxZoom": True, "disableClusteringAtZoom": 15},
+                               icon_create_function=f"""function(cluster) {{ return L.divIcon({{
+                                   html: `<div style="background-color:{col};color:white;border-radius:50%;width:45px;height:45px;display:flex;align-items:center;justify-content:center;font-weight:bold;border:3px solid white;box-shadow:3px 3px 8px rgba(0,0,0,0.5);font-size:11px;"><span>{tot:,.0f}</span></div>`,
+                                   className:'marker-cluster', iconSize:L.point(45,45) }}); }}""")
+            for _, r in sub.iterrows():
+                _rr = min(5 + (r["votos"] / vmax) * 20, 25)
+                folium.CircleMarker(location=[r["latitud"], r["longitud"]], radius=_rr,
+                    color=col, fill=True, fillColor=col, fillOpacity=0.7, weight=1.5,
+                    popup=f"{r['lugar']}<br>{int(r['votos']):,} votos — C{cid}",
+                    tooltip=f"{r['lugar']}: {int(r['votos']):,} votos").add_to(mc)
+            mc.add_to(fg_hdb)
         fg_hdb.add_to(m)
 
+        # Calor ponderado por votos
+        fg_heat = folium.FeatureGroup(name="Mapa de Calor", show=False)
+        HeatMap([[r["latitud"], r["longitud"], r["votos"]] for _, r in puestos.iterrows()],
+                min_opacity=0.3, max_opacity=0.85, radius=15, blur=6,
+                gradient={0.0: "#0000FF", 0.4: "#00FFFF", 0.6: "#00FF00", 0.8: "#FFFF00", 1.0: "#FF0000"}).add_to(fg_heat)
+        fg_heat.add_to(m)
+
         folium.LayerControl(collapsed=False).add_to(m)
+        Fullscreen(position="topright").add_to(m)
+        MiniMap(position="bottomright", width=150, height=150).add_to(m)
         map_data = st_folium(m, height=520, use_container_width=True, returned_objects=["last_object_clicked"])
         if map_data and map_data.get("last_object_clicked"):
             st.session_state.sel_upz = map_data["last_object_clicked"].get("properties",{}).get("nombre") or map_data["last_object_clicked"].get("tooltip")
