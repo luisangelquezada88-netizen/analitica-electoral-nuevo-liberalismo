@@ -1,0 +1,9 @@
+# Tablero electoral — despliegue local/VPS (Fase 6)
+# Uso: docker compose up --build -d   |   ver en http://localhost:8501
+services:
+  app:
+    build: .
+    image: tablero-electoral
+    ports:
+      - "8501:8501"
+    restart: unless-stopped

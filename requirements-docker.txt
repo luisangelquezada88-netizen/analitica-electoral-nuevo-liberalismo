@@ -1,0 +1,12 @@
+# Dependencias de RUNTIME del tablero (Fase 6, Docker).
+# Subconjunto de requirements.txt: solo lo que importa src/dashboard_electoral.py
+# (verificado por grep de imports). requirements.txt se conserva intacto para
+# Streamlit Cloud y notebooks (geopandas/hdbscan/jupyter = dev).
+pandas==3.0.5
+numpy==2.5.3
+pyarrow==25.0.1
+plotly==7.0.0
+streamlit==1.63.0
+pydeck==0.9.3
+scikit-learn==1.9.1
+unidecode==1.4.0
