@@ -1,22 +1,26 @@
-# Núcleo reproducible
-pandas
-numpy
-duckdb
-pyarrow
-# Geoespacial y clustering (Fase 4)
-geopandas
-hdbscan
-scikit-learn
-matplotlib
-seaborn
-# Tablero (Fase 5)
-plotly
-streamlit
-streamlit-folium
-folium
+# Núcleo reproducible (pineado para deploy — versions medidas en .venv)
+pandas==3.0.5
+numpy==2.5.3
+duckdb==1.5.5
+pyarrow==25.0.1
+# Geoespacial y clustering (notebooks + fallback; el dashboard final NO los importa al arranque)
+geopandas==1.1.4
+pyogrio==0.13.0
+shapely==2.1.2
+hdbscan==0.8.44
+scikit-learn==1.9.1
+matplotlib==3.11.2
+seaborn==0.13.2
+# Tablero final (Fase 5-6): Plotly + Streamlit + PyDeck nativo (sin Folium en hot-path)
+plotly==7.0.0
+streamlit==1.63.0
+pydeck==0.9.3
+# Legacy: se conservan para compat pero el dashboard final no los usa (quitar acelera deploy)
+# streamlit-folium==0.27.4
+# folium==0.20.0
 # Limpieza texto y Excel (Fase 3)
-unidecode
-openpyxl
+unidecode==1.4.0
+openpyxl==3.1.5
 # Notebooks
-jupyter
-ipykernel
+jupyter==1.1.1
+ipykernel==7.3.0

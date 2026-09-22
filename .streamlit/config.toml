@@ -1,0 +1,19 @@
+[theme]
+# Solo modo claro: la app usa fondo claro fijo (#FDF8F8) con texto oscuro.
+# Sin esto, el modo oscuro del visor pinta el texto de los widgets en blanco
+# sobre ese fondo claro y los títulos de los filtros se vuelven ilegibles.
+base = "light"
+
+[server]
+# Deploy: arranque frío más rápido y sin rebotes por archivos grandes
+headless = true
+maxUploadSize = 50
+maxMessageSize = 200
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"
