@@ -2,7 +2,7 @@
 Versión optimizada para despliegue:
 - Parquets con categorical/int32 (24 MB vs 210 MB), HDBSCAN + nk precomputados.
 - GeoJSON ligero pre-simplificado en data/processed/geo/ (sin geopandas/folium en runtime).
-- Nacional: Plotly choropleth con geojson cacheado + uirevision.
+- Nacional: mapa PyDeck (GeoJsonLayer, modo claro) con geojson cacheado.
 - Distrital: PyDeck nativo (WebGL) en vez de Folium/Leaflet.
 - Sin copias de 200 MB: filtros por máscara, groupbys observed=True, KMeans n_init=10.
 """
@@ -324,6 +324,51 @@ def _build_pydeck(corp_t, loc_t, upz_t, ano_t, show_upz, show_loc, show_puestos,
         raise ValueError("activa al menos una capa")
     view = pdk.ViewState(latitude=lat_c, longitude=lon_c, zoom=10.5, pitch=0)
     deck = pdk.Deck(layers=layers, initial_view_state=view, map_style="light",
+                    tooltip={"html": "<b>{titulo}</b><br/><span>{sub}</span><br/>Votos: <b>{votos_fmt}</b>"})
+    return deck
+
+def _build_pydeck_nac(gbase):
+    """Mapa departamental PyDeck: mismo look & feel que el visor distrital
+    (WebGL, modo claro, interactivo; sin controles de capas: una sola capa).
+    gbase trae columnas dpto_ccdgo/dpto_cnmbr/votos/log_votos (ya sin San Andrés)."""
+    dept_geo = load_dept_geo()
+    vmap = dict(zip(gbase["dpto_ccdgo"].astype(str), gbase["votos"]))
+    lmap = dict(zip(gbase["dpto_ccdgo"].astype(str), gbase["log_votos"]))
+    vmax = float(gbase["log_votos"].max()) if len(gbase) else 1.0
+    gj = copy.deepcopy(dept_geo)
+    feats = []
+    for f in gj["features"]:
+        cc = str(f["properties"].get("dpto_ccdgo", ""))
+        if cc == "88":
+            continue  # San Andrés: mancha ilegible a esta escala (sigue en tarjetas/tablas)
+        v = float(vmap.get(cc, 0) or 0)
+        lv = float(lmap.get(cc, 0) or 0)
+        nn = (lv / vmax) if vmax else 0
+        # Umbrales calibrados sobre la distribución real (log-ratio 0.48–1.0):
+        # ~1 dpto alto (Bogotá), ~10 medio-altos, ~14 medios, ~6 bajos.
+        if nn > 0.9:
+            fill = [124, 45, 18, 185]
+        elif nn > 0.8:
+            fill = [180, 35, 24, 185]
+        elif nn > 0.65:
+            fill = [252, 165, 165, 185]
+        else:
+            fill = [255, 245, 245, 185]
+        f["properties"]["votos"] = int(v)
+        f["properties"]["votos_fmt"] = fmt(v)
+        f["properties"]["titulo"] = str(f["properties"].get("dpto_cnmbr", ""))
+        f["properties"]["sub"] = "Nuevo Liberalismo"
+        f["properties"]["fill"] = fill
+        f["properties"]["dpto_ccdgo"] = cc
+        feats.append(f)
+    gj["features"] = feats
+    layer = pdk.Layer("GeoJsonLayer", data=gj, id="deptos",
+                      filled=True, stroked=True, get_fill_color="properties.fill",
+                      get_line_color="[90,90,90,200]", line_width_min_pixels=1,
+                      pickable=True, auto_highlight=True)
+    # Colombia vertical: encuadre fijo país completo (en móvil las columnas se apilan)
+    view = pdk.ViewState(latitude=4.4, longitude=-73.5, zoom=4.6, pitch=0)
+    deck = pdk.Deck(layers=[layer], initial_view_state=view, map_style="light",
                     tooltip={"html": "<b>{titulo}</b><br/><span>{sub}</span><br/>Votos: <b>{votos_fmt}</b>"})
     return deck
 
@@ -658,11 +703,8 @@ if pagina == "Nacional":
         return out
 
     kpi_slot = st.container()
-    # Fila 1: mapa full-width protagonista; fila 2: K-means full-width debajo.
-    # (Containers apilados: mismo código, sin reindentar; el letterbox por aspecto
-    # de Colombia se compensa con más alto + zoom óptico leve.)
-    colA = st.container()
-    colB = st.container()
+    # Mapa a la izquierda + K-means a la derecha (en móvil las columnas se apilan solas).
+    colA, colB = st.columns([1.5, 1])
     with colA:
         dept_agg = flt.groupby("cod_dpto_geo", observed=True).agg(votos=("votos", "sum")).reset_index()
         dept_geo = load_dept_geo()
@@ -676,29 +718,24 @@ if pagina == "Nacional":
         gbase["votos"] = gbase["votos"].fillna(0)
         gbase = gbase[gbase["dpto_ccdgo"] != "88"]
         gbase["log_votos"] = np.log1p(gbase["votos"])
-        fig = px.choropleth(gbase, geojson=dept_geo, locations="dpto_ccdgo", featureidkey="properties.dpto_ccdgo",
-                            color="log_votos", hover_name="dpto_cnmbr",
-                            hover_data={"log_votos": False, "votos": True, "dpto_ccdgo": False},
-                            color_continuous_scale=[[0, "#FFF5F5"], [0.35, "#FCA5A5"], [0.65, COLORS["red"]], [1, COLORS["red_dark"]]],
-                            title="Votos por departamento")
-        fig.update_geos(fitbounds="locations", visible=False, showframe=False,
-                        showcoastlines=False, showland=False, showocean=False,
-                        bgcolor="rgba(0,0,0,0)",
-                        projection=dict(scale=1.1, minscale=1.1, maxscale=1.1))
-        fig.update_layout(height=850, margin=dict(l=0, r=0, t=40, b=0), dragmode=False,
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", uirevision="nacional",
-            coloraxis_colorbar=dict(title="log(votos)", bgcolor="rgba(0,0,0,0)",
-                tickfont=dict(color=COLORS["text"]), title_font=dict(color=COLORS["text"])))
-        fig.update_layout(font=dict(color=COLORS["text"]))
-        sel = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points",
+        # Visor PyDeck como el distrital: WebGL interactivo, modo claro, sin capas extra.
+        deck = _build_pydeck_nac(gbase)
+        ev = st.pydeck_chart(deck, width="stretch", height=600,
             key=f"map_nac_{st.session_state.nonce_nac}_{st.session_state._sel_tick}",
-            config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False, "showTips": False})
+            on_select="rerun", selection_mode="single-object")
         st.caption("San Andrés y Providencia se excluye del croquis por escala; sus votos siguen en tarjetas, K-means y tablas.")
         # Selección con fuente: evita el ping-pong mapa<->K-means (titileo) donde el mapa
         # fijaba el depto y el K-means vacío lo borraba en el mismo ciclo. La cascada
         # (tarjetas, K-means, barras, treemap y tablas) ya consume sel_depto_map.
-        pts = _sel_points(sel)
-        _mpick = pts[0].get("location") if pts else None
+        _objs = ((ev or {}).get("selection", {}) or {}).get("objects", {}) or {}
+        _mpick = None
+        try:
+            for _lid, _items in _objs.items():
+                if _items:
+                    _mpick = str((_items[0] or {}).get("dpto_ccdgo") or "") or None
+                    break
+        except Exception:
+            _mpick = None
         _mcur = st.session_state.sel_depto_map
         _msrc = st.session_state.get("_sel_src")
         _mlast = st.session_state.get("_last_map_pick")
