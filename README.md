@@ -1,10 +1,15 @@
-# Analítica electoral — Nuevo Liberalismo y Carlos Fernando Galán
+﻿# Analítica electoral — Nuevo Liberalismo y Carlos Fernando Galán
+
+<div align="center">
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Profile-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/luis-angel-quezada-aguirre-291333268)
 [![Streamlit](https://img.shields.io/badge/Streamlit-Cloud-FF4B4B?logo=streamlit&logoColor=white)](https://nuevo-liberalismo.streamlit.app/)
 [![Carto](https://img.shields.io/badge/Carto-Maps-37A1E2?logo=carto&logoColor=white)](https://carto.com/)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Jupyter](https://img.shields.io/badge/Jupyter-Notebooks-F37626?logo=jupyter&logoColor=white)](notebooks/)
+
+</div>
 
 Repositorio de analítica electoral geoespacial del partido Nuevo Liberalismo y de la trayectoria del actual alcalde de Bogotá, Carlos Fernando Galán.
 
